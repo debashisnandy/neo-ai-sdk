@@ -1,0 +1,12 @@
+{
+  // The main tsconfig excludes test/ so declaration emit only covers src.
+  // This config typechecks the tests (and src) without emitting anything.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Widened from src/ because nothing is emitted here.
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src", "test", "vitest.config.ts", "tsup.config.ts"]
+}
