@@ -37,6 +37,23 @@ export class TimeoutError extends NeoError {
   override name = "TimeoutError";
 }
 
+/** Where in the request lifecycle a guardrail ran. */
+export type GuardrailStage = "input" | "toolCall" | "output";
+
+/** Thrown when a guardrail denies a request, tool call, or response. */
+export class GuardrailError extends NeoError {
+  override name = "GuardrailError";
+  constructor(
+    /** The guardrail that denied it. */
+    readonly guardrail: string,
+    readonly stage: GuardrailStage,
+    /** The guardrail's stated reason, safe to surface to callers. */
+    readonly reason: string,
+  ) {
+    super(`Guardrail "${guardrail}" blocked this ${stage}: ${reason}`);
+  }
+}
+
 /** Pull a human-readable message out of a provider error body, if present. */
 function messageFromBody(body: unknown): string | undefined {
   if (body && typeof body === "object") {

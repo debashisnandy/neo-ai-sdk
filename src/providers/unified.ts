@@ -12,6 +12,13 @@ import type { GenerateParams, GenerateResult, StreamChunk } from "../core/types.
 import { Transport, type FetchLike } from "../core/http.js";
 import { NeoError } from "../core/errors.js";
 import { WorkerPool } from "../orchestrator/worker-pool.js";
+import {
+  combineGuardrails,
+  runInputGuardrails,
+  runOutputGuardrails,
+  runToolCallGuardrails,
+} from "../guardrails/runner.js";
+import type { Guardrail } from "../guardrails/types.js";
 import { orchestrate, type ResolvedOrchestrateOptions } from "../orchestrator/orchestrator.js";
 import {
   ProviderName,
@@ -40,6 +47,8 @@ export interface UnifiedProviderOptions {
    * sub-agent traffic through worker threads; see WorkerPool.
    */
   fetchImpl?: FetchLike;
+  /** Guardrails applied to every call. Per-request guardrails run after these. */
+  guardrails?: readonly Guardrail[];
 }
 
 /** GenerateParams pinned to the strict "<company>/<model>" id type. */
@@ -94,8 +103,31 @@ export class UnifiedProvider implements Provider {
     }
   }
 
-  /** A single, non-orchestrated generate call. */
+  /**
+   * A single, non-orchestrated generate call, wrapped in guardrails:
+   * input runs before the request, tool-call and output run after it.
+   */
   private async generateOnce(params: UnifiedGenerateParams): Promise<GenerateResult> {
+    const guardrails = combineGuardrails(this.options.guardrails, params.guardrails);
+    if (guardrails.length === 0) return this.rawGenerate(params);
+
+    const messages = await runInputGuardrails(guardrails, params.model, params.messages, params);
+    const raw = await this.rawGenerate({ ...params, messages });
+
+    // Inspect tool calls before the caller can act on them — that is the whole
+    // point of blocking a dangerous call.
+    const toolCalls = await runToolCallGuardrails(
+      guardrails,
+      params.model,
+      raw.toolCalls,
+      params,
+    );
+
+    return runOutputGuardrails(guardrails, params.model, { ...raw, toolCalls }, params);
+  }
+
+  /** The provider call itself, with no guardrails applied. */
+  private async rawGenerate(params: UnifiedGenerateParams): Promise<GenerateResult> {
     const { provider, model, transport } = this.route(params.model);
 
     if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
@@ -111,7 +143,38 @@ export class UnifiedProvider implements Provider {
     throw new NeoError(`generate() is not implemented for provider "${provider}".`);
   }
 
+  /**
+   * Streaming applies input and tool-call guardrails.
+   *
+   * Output guardrails are skipped: text is emitted incrementally, so there is
+   * no complete response to validate or redact before the caller has already
+   * seen it. Use generate() when output guardrails must hold.
+   */
   async *stream(params: UnifiedGenerateParams): AsyncIterable<StreamChunk> {
+    const guardrails = combineGuardrails(this.options.guardrails, params.guardrails);
+
+    const messages = guardrails.length
+      ? await runInputGuardrails(guardrails, params.model, params.messages, params)
+      : params.messages;
+
+    for await (const chunk of this.rawStream({ ...params, messages })) {
+      // Tool calls arrive complete in a single chunk, so they can still be
+      // inspected before the caller acts on them.
+      if (chunk.toolCalls?.length && guardrails.length) {
+        const checked = await runToolCallGuardrails(
+          guardrails,
+          params.model,
+          chunk.toolCalls,
+          params,
+        );
+        yield { ...chunk, toolCalls: checked };
+        continue;
+      }
+      yield chunk;
+    }
+  }
+
+  private async *rawStream(params: UnifiedGenerateParams): AsyncIterable<StreamChunk> {
     const { provider, model, transport } = this.route(params.model);
 
     if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
