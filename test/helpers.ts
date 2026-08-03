@@ -4,6 +4,7 @@
  */
 
 import { vi } from "vitest";
+import type { StreamChunk } from "../src/core/types.js";
 
 export interface CapturedRequest {
   url: string;
@@ -92,17 +93,20 @@ export function mockFetch(
   };
 }
 
-/** Drain an async iterable of chunks into concatenated text + final usage. */
-export async function collectStream(
-  stream: AsyncIterable<{ delta: string; usage?: { inputTokens: number; outputTokens: number } }>,
-) {
+/** Drain a stream into concatenated text, final usage, and final tool calls. */
+export async function collectStream(stream: AsyncIterable<StreamChunk>) {
   let text = "";
-  let usage: { inputTokens: number; outputTokens: number } | undefined;
+  let usage: StreamChunk["usage"];
+  let toolCalls: StreamChunk["toolCalls"];
   const deltas: string[] = [];
+  const chunks: StreamChunk[] = [];
+
   for await (const chunk of stream) {
+    chunks.push(chunk);
     text += chunk.delta;
     if (chunk.delta) deltas.push(chunk.delta);
     if (chunk.usage) usage = chunk.usage;
+    if (chunk.toolCalls) toolCalls = chunk.toolCalls;
   }
-  return { text, deltas, usage };
+  return { text, deltas, usage, toolCalls, chunks };
 }

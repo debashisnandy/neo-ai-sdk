@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lowest supported version (see engines) and current LTS.
+        node: ["20.11", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Catches packaging regressions (exports map, files, declarations) that
+      # only appear once the package is installed rather than imported from src.
+      - name: Verify the packed tarball resolves
+        run: |
+          npm pack --pack-destination /tmp
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          npm install /tmp/neo-ai-sdk-*.tgz
+          node --input-type=module -e "
+            import { NeoClient, parseModelId } from 'neo-ai-sdk';
+            if (typeof NeoClient !== 'function') throw new Error('ESM export missing');
+            if (parseModelId('openai/gpt-5').provider !== 'openai') throw new Error('ESM behavior wrong');
+            console.log('ESM ok');
+          "
+          node --input-type=commonjs -e "
+            const { NeoClient } = require('neo-ai-sdk');
+            if (typeof NeoClient !== 'function') throw new Error('CJS export missing');
+            console.log('CJS ok');
+          "

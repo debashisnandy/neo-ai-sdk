@@ -53,6 +53,7 @@ describe("OpenAI-compatible: generate", () => {
       text: "hello",
       model: "gpt-5",
       usage: { inputTokens: 10, outputTokens: 4 },
+      toolCalls: [],
       finishReason: "stop",
     });
   });
@@ -75,7 +76,7 @@ describe("OpenAI-compatible: generate", () => {
     ["stop", "stop"],
     ["length", "length"],
     ["content_filter", "content_filter"],
-    ["tool_calls", "stop"],
+    ["tool_calls", "tool_use"],
     [null, "stop"],
   ])("maps finish_reason %s to %s", async (raw, expected) => {
     mockFetch([jsonResponse({ choices: [{ message: { content: "" }, finish_reason: raw }] })]);
@@ -152,10 +153,11 @@ describe("Anthropic: generate", () => {
 
     // System is a top-level field, never an inline message.
     expect(req.body.system).toBe("be brief");
+    // Anthropic content is a list of blocks, not a bare string.
     expect(req.body.messages).toEqual([
-      { role: "user", content: "hi" },
-      { role: "assistant", content: "hello" },
-      { role: "user", content: "again" },
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "hello" }] },
+      { role: "user", content: [{ type: "text", text: "again" }] },
     ]);
     expect(result.text).toBe("hi there");
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 5 });

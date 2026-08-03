@@ -1,0 +1,50 @@
+name: Publish
+
+# Publishing is triggered by creating a GitHub Release, so the version bump and
+# the tag are deliberate acts rather than a side effect of pushing to main.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      # Required for npm provenance: mints the OIDC token that signs the
+      # attestation linking this tarball to this repo and commit.
+      # package.json sets publishConfig.provenance, so `npm publish` uses it.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+
+      # prepublishOnly also runs these, but failing here gives a clearer signal
+      # before anything is uploaded.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Verify the release tag matches package.json
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "Release tag ($tag) does not match package.json version ($pkg)" >&2
+            exit 1
+          fi
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
