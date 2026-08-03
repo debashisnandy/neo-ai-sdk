@@ -19,6 +19,8 @@ import {
   runToolCallGuardrails,
 } from "../guardrails/runner.js";
 import type { Guardrail } from "../guardrails/types.js";
+import { combineMemory, persistFrom, recallInto } from "../memory/runner.js";
+import type { MemorySpec } from "../memory/types.js";
 import { orchestrate, type ResolvedOrchestrateOptions } from "../orchestrator/orchestrator.js";
 import {
   ProviderName,
@@ -49,6 +51,11 @@ export interface UnifiedProviderOptions {
   fetchImpl?: FetchLike;
   /** Guardrails applied to every call. Per-request guardrails run after these. */
   guardrails?: readonly Guardrail[];
+  /**
+   * Long-term memory. `true` enables mem0 from MEM0_API_KEY; an object
+   * configures it. Per-request `memory` overrides these fields.
+   */
+  memory?: MemorySpec;
 }
 
 /** GenerateParams pinned to the strict "<company>/<model>" id type. */
@@ -104,26 +111,45 @@ export class UnifiedProvider implements Provider {
   }
 
   /**
-   * A single, non-orchestrated generate call, wrapped in guardrails:
-   * input runs before the request, tool-call and output run after it.
+   * A single, non-orchestrated generate call.
+   *
+   * Order is deliberate:
+   *   input guardrails → memory recall → provider → tool-call guardrails
+   *   → output guardrails → memory persist
+   *
+   * Guardrails bracket memory on both sides, so a redaction guardrail scrubs
+   * text before it is stored — memory never ends up holding the secrets that
+   * redaction exists to remove.
    */
   private async generateOnce(params: UnifiedGenerateParams): Promise<GenerateResult> {
     const guardrails = combineGuardrails(this.options.guardrails, params.guardrails);
-    if (guardrails.length === 0) return this.rawGenerate(params);
+    const memory = combineMemory(this.options.memory, params.memory);
 
-    const messages = await runInputGuardrails(guardrails, params.model, params.messages, params);
+    if (guardrails.length === 0 && !memory) return this.rawGenerate(params);
+
+    let messages = guardrails.length
+      ? await runInputGuardrails(guardrails, params.model, params.messages, params)
+      : params.messages;
+
+    // Keep the guarded messages for persistence; recall only augments the
+    // prompt and should not be written back into memory.
+    const guarded = messages;
+    if (memory) messages = await recallInto(memory, messages);
+
     const raw = await this.rawGenerate({ ...params, messages });
 
     // Inspect tool calls before the caller can act on them — that is the whole
     // point of blocking a dangerous call.
-    const toolCalls = await runToolCallGuardrails(
-      guardrails,
-      params.model,
-      raw.toolCalls,
-      params,
-    );
+    const toolCalls = guardrails.length
+      ? await runToolCallGuardrails(guardrails, params.model, raw.toolCalls, params)
+      : raw.toolCalls;
 
-    return runOutputGuardrails(guardrails, params.model, { ...raw, toolCalls }, params);
+    const result = guardrails.length
+      ? await runOutputGuardrails(guardrails, params.model, { ...raw, toolCalls }, params)
+      : { ...raw, toolCalls };
+
+    if (memory) await persistFrom(memory, guarded, result);
+    return result;
   }
 
   /** The provider call itself, with no guardrails applied. */
