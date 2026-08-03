@@ -8,17 +8,15 @@
   },
   "exports": {
     ".": {
-      "node": {
-        "import": {
-          "types": "./dist/index.d.ts",
-          "default": "./dist/index.js"
-        },
-        "require": {
-          "types": "./dist/index.d.cts",
-          "default": "./dist/index.cjs"
-        }
+      "browser": "./dist/unsupported.js",
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
       },
-      "default": "./dist/unsupported.js"
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -36,11 +34,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/debashisnandy/your-pkg.git"
+    "url": "git+https://github.com/debashisnandy/neo-ai-sdk.git"
   },
   "scripts": {
     "build": "tsup && npm run build:types",
-    "build:types": "tsc --emitDeclarationOnly && cp dist/index.d.ts dist/index.d.cts",
+    "build:types": "node scripts/build-types.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -52,5 +50,26 @@
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  }
+  },
+  "homepage": "https://github.com/debashisnandy/neo-ai-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/debashisnandy/neo-ai-sdk/issues"
+  },
+  "description": "One typed client for eight AI model providers, addressed as <company>/<model>.",
+  "keywords": [
+    "ai",
+    "llm",
+    "openai",
+    "anthropic",
+    "claude",
+    "gemini",
+    "mistral",
+    "deepseek",
+    "xai",
+    "grok",
+    "qwen",
+    "llama",
+    "sdk",
+    "streaming"
+  ]
 }

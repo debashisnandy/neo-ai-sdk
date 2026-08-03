@@ -21,6 +21,10 @@ export type {
   GenerateResult,
   StreamChunk,
   Usage,
+  Tool,
+  ToolCall,
+  ToolChoice,
+  JSONSchema,
 } from "./core/types.js";
 
 // --- Errors ---------------------------------------------------------------
