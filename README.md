@@ -22,6 +22,7 @@ console.log(result.text);
 - **Tool calling** with one normalized shape across all three wire formats.
 - **Structured output** — pass a Zod (or any Standard Schema) schema, get a typed object.
 - **Streaming** everywhere, via a normalized `StreamChunk`.
+- **Guardrails** — validate, redact, or require approval before and after a call.
 - **Multi-agent orchestration** — let the model split big tasks across sub-agents.
 - **No runtime dependencies.** ESM + CJS, Node >= 20.11.
 
@@ -35,7 +36,8 @@ npm install neo-ai-sdk
 
 [Providers](#providers) · [Keys](#keys) · [Typed model ids](#typed-model-ids) ·
 [Streaming](#streaming) · [Tool calling](#tool-calling) · [Structured output](#structured-output) ·
-[Multi-agent orchestration](#multi-agent-orchestration) · [Messages](#messages) ·
+[Guardrails](#guardrails) · [Multi-agent orchestration](#multi-agent-orchestration) ·
+[Messages](#messages) ·
 [Configuration](#configuration) · [Errors](#errors) ·
 [Result shape](#result-shape) · [Custom providers](#custom-providers) ·
 [Exports](#exports)
@@ -276,6 +278,127 @@ Two limits worth knowing:
 - **Asynchronous schema validation is rejected.** Zod's `.refine(async …)`
   throws rather than being silently skipped.
 
+## Guardrails
+
+Validate and transform requests before they are sent, and responses before you
+act on them.
+
+```ts
+import { NeoClient, denyTools, redact, maxInputLength } from "neo-ai-sdk";
+
+const ai = new NeoClient({
+  apiKeys: { openai: process.env.OPENAI_API_KEY },
+  guardrails: [
+    maxInputLength(50_000),
+    redact({ stages: ["input"] }),        // never send secrets to a provider
+    denyTools(["delete_database"]),        // never let the model call this
+  ],
+});
+```
+
+Guardrails hook three points:
+
+| Hook | Runs | Can |
+| --- | --- | --- |
+| `input` | before the request is sent | reject the request, or rewrite messages |
+| `toolCall` | on each tool the model asks for | block it, rewrite arguments, await approval |
+| `output` | after the response arrives | reject it, or rewrite it |
+
+A denial throws a `GuardrailError` carrying `guardrail`, `stage`, and `reason`.
+
+```ts
+import { GuardrailError } from "neo-ai-sdk";
+
+try {
+  await ai.generate({ model: "openai/gpt-5", messages });
+} catch (err) {
+  if (err instanceof GuardrailError) {
+    console.log(err.guardrail, err.stage, err.reason);
+  }
+}
+```
+
+Set them on the client (applies to every call) or per request via
+`guardrails` — client ones run first.
+
+### Built-in guardrails
+
+```ts
+maxInputLength(50_000)                       // reject oversized requests
+blockInputPatterns({ patterns: [/^ignore previous/i] })
+
+denyTools(["drop_table"])                    // block by name
+allowTools(["search", "read_file"])          // safer: refuse anything else
+blockToolArguments({ patterns: [/drop\s+table/i], tools: ["run_sql"] })
+
+validateOutput({ check: (r) => r.text.length < 10 ? "too short" : undefined })
+redact({ stages: ["input", "output"] })
+```
+
+### Requiring approval
+
+`approve` may be async, so it can prompt a person or call a policy service:
+
+```ts
+import { requireApproval } from "neo-ai-sdk";
+
+requireApproval({
+  tools: ["send_email", "delete_records"],
+  approve: async (call) => askOperator(`Run ${call.name} with ${JSON.stringify(call.arguments)}?`),
+});
+```
+
+Returning `false` blocks the call with a `GuardrailError`. Tools not listed
+skip the prompt entirely; omit `tools` to gate everything.
+
+### Redaction
+
+`redact()` rewrites rather than rejects — the request still goes through, minus
+the sensitive parts. It covers emails, credit-card numbers, SSNs and common API
+key shapes (`SENSITIVE_PATTERNS`), and scrubs **structured output too**, so
+redaction can't be sidestepped by asking for JSON.
+
+```ts
+redact({ patterns: [/INTERNAL-\d+/g], replacement: "***", stages: ["output"] });
+```
+
+### Writing your own
+
+A guardrail is a plain object. Return nothing to allow, `deny(reason)` to
+block, or `modify(value)` to rewrite:
+
+```ts
+import { deny, modify, type Guardrail } from "neo-ai-sdk";
+
+const businessHoursOnly: Guardrail = {
+  name: "business-hours",
+  toolCall({ toolCall }) {
+    const hour = new Date().getHours();
+    if (toolCall.name === "charge_card" && (hour < 9 || hour > 17)) {
+      return deny("payments are only allowed 09:00–17:00");
+    }
+  },
+};
+
+const clampLimit: Guardrail = {
+  name: "clamp-limit",
+  toolCall: ({ toolCall }) =>
+    modify({ ...toolCall, arguments: { ...toolCall.arguments, limit: 100 } }),
+};
+```
+
+Each guardrail's modification feeds the next, so ordering matters: put
+`redact` before a validator and the validator sees redacted data.
+
+### Streaming
+
+`stream()` applies **input** and **tool-call** guardrails — a dangerous call is
+still blocked, because tool calls arrive complete in one chunk.
+
+**Output guardrails do not run on streams.** Text is emitted incrementally, so
+there is no complete response to validate before you have already received it.
+Use `generate()` when an output guardrail must hold.
+
 ## Multi-agent orchestration
 
 Pass `orchestrate` and the model first decides whether the request is worth
@@ -503,6 +626,11 @@ Everything is a named export from `neo-ai-sdk`.
 | `parseModelId` | fn | Split `"<company>/<model>"`, validating the prefix |
 | `apiKeysFromEnv` | fn | Read provider keys from an env object |
 | `NeoError` | class | Base class for every error the SDK throws |
+| `GuardrailError` | class | Thrown when a guardrail denies a request, tool call, or response |
+| `deny` `modify` | fn | Guardrail decision helpers |
+| `maxInputLength` `blockInputPatterns` `denyTools` `allowTools` `requireApproval` `blockToolArguments` `validateOutput` `redact` | fn | Built-in guardrails |
+| `SENSITIVE_PATTERNS` | const | Default redaction patterns |
+| `Guardrail` `GuardrailDecision` `InputContext` `ToolCallContext` `OutputContext` | type | Guardrail types |
 | `APIError` `AuthenticationError` `RateLimitError` `TimeoutError` | class | Error subclasses |
 | `Provider` | type | Interface for custom backends |
 | `WorkerPool` | class | Thread pool behind the "worker" executor, usable directly |

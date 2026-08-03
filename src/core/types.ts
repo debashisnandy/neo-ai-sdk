@@ -7,6 +7,7 @@
  */
 
 import type { OutputSpec } from "./output.js";
+import type { Guardrail } from "../guardrails/types.js";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -137,6 +138,11 @@ export interface GenerateParams<TModel extends string = string> {
    * Cannot be combined with `tools` — see the note in the README.
    */
   output?: OutputSpec;
+  /**
+   * Validation and transformation around this call. Runs after any guardrails
+   * configured on the client. See the Guardrail type.
+   */
+  guardrails?: readonly Guardrail[];
   /** Abort in-flight requests. Wired through to the transport's fetch call. */
   signal?: AbortSignal;
 }

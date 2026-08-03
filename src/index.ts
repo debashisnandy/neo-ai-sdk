@@ -60,3 +60,26 @@ export type {
   InferOutput,
   StandardSchemaV1,
 } from "./core/output.js";
+
+// --- Guardrails -----------------------------------------------------------
+export { GuardrailError } from "./core/errors.js";
+export type { GuardrailStage } from "./core/errors.js";
+export { deny, modify } from "./guardrails/types.js";
+export type {
+  Guardrail,
+  GuardrailDecision,
+  InputContext,
+  ToolCallContext,
+  OutputContext,
+} from "./guardrails/types.js";
+export {
+  maxInputLength,
+  blockInputPatterns,
+  denyTools,
+  allowTools,
+  requireApproval,
+  blockToolArguments,
+  validateOutput,
+  redact,
+  SENSITIVE_PATTERNS,
+} from "./guardrails/builtin.js";
