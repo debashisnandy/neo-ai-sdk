@@ -83,3 +83,16 @@ export {
   redact,
   SENSITIVE_PATTERNS,
 } from "./guardrails/builtin.js";
+
+// --- Memory (optional) ----------------------------------------------------
+export { mem0Store, mem0FromEnv, MEM0_ENV_VAR } from "./memory/mem0.js";
+export type { Mem0StoreOptions } from "./memory/mem0.js";
+export { inMemoryStore } from "./memory/in-memory.js";
+export type { InMemoryStore } from "./memory/in-memory.js";
+export type {
+  MemoryStore,
+  MemoryOptions,
+  MemorySpec,
+  MemoryRecord,
+  MemoryScope,
+} from "./memory/types.js";

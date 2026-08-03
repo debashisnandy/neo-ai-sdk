@@ -8,6 +8,7 @@
 
 import type { OutputSpec } from "./output.js";
 import type { Guardrail } from "../guardrails/types.js";
+import type { MemorySpec } from "../memory/types.js";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -143,6 +144,12 @@ export interface GenerateParams<TModel extends string = string> {
    * configured on the client. See the Guardrail type.
    */
   guardrails?: readonly Guardrail[];
+  /**
+   * Long-term memory for this call: recall relevant context before it, persist
+   * the exchange after. Overrides the client's memory options field by field,
+   * so a per-request `userId` is enough.
+   */
+  memory?: MemorySpec;
   /** Abort in-flight requests. Wired through to the transport's fetch call. */
   signal?: AbortSignal;
 }

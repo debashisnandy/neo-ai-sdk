@@ -1,6 +1,6 @@
 {
   "name": "neo-ai-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -56,21 +56,38 @@
   "bugs": {
     "url": "https://github.com/debashisnandy/neo-ai-sdk/issues"
   },
-  "description": "One typed client for eight AI model providers, addressed as <company>/<model>.",
+  "description": "Unified TypeScript SDK for OpenAI, Anthropic Claude, Gemini, Mistral, DeepSeek, xAI Grok, Qwen and Llama \u2014 one API with streaming, tool calling, structured output, guardrails, memory and multi-agent orchestration.",
   "keywords": [
     "ai",
     "llm",
+    "ai-sdk",
+    "llm-sdk",
+    "ai-agents",
+    "agents",
     "openai",
     "anthropic",
     "claude",
     "gemini",
+    "google-gemini",
     "mistral",
     "deepseek",
     "xai",
     "grok",
     "qwen",
     "llama",
-    "sdk",
-    "streaming"
+    "streaming",
+    "tool-calling",
+    "function-calling",
+    "structured-output",
+    "zod",
+    "json-schema",
+    "guardrails",
+    "memory",
+    "mem0",
+    "multi-agent",
+    "orchestration",
+    "llm-router",
+    "ai-gateway",
+    "typescript"
   ]
 }

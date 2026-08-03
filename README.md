@@ -23,6 +23,7 @@ console.log(result.text);
 - **Structured output** — pass a Zod (or any Standard Schema) schema, get a typed object.
 - **Streaming** everywhere, via a normalized `StreamChunk`.
 - **Guardrails** — validate, redact, or require approval before and after a call.
+- **Memory** — optional long-term memory: set MEM0_API_KEY and `memory: true`.
 - **Multi-agent orchestration** — let the model split big tasks across sub-agents.
 - **No runtime dependencies.** ESM + CJS, Node >= 20.11.
 
@@ -36,7 +37,8 @@ npm install neo-ai-sdk
 
 [Providers](#providers) · [Keys](#keys) · [Typed model ids](#typed-model-ids) ·
 [Streaming](#streaming) · [Tool calling](#tool-calling) · [Structured output](#structured-output) ·
-[Guardrails](#guardrails) · [Multi-agent orchestration](#multi-agent-orchestration) ·
+[Guardrails](#guardrails) · [Memory](#memory-optional) ·
+[Multi-agent orchestration](#multi-agent-orchestration) ·
 [Messages](#messages) ·
 [Configuration](#configuration) · [Errors](#errors) ·
 [Result shape](#result-shape) · [Custom providers](#custom-providers) ·
@@ -399,6 +401,122 @@ still blocked, because tool calls arrive complete in one chunk.
 there is no complete response to validate before you have already received it.
 Use `generate()` when an output guardrail must hold.
 
+## Memory (optional)
+
+Give the model long-term memory: relevant context is recalled before a call and
+the exchange is persisted after it.
+
+[mem0](https://mem0.ai) works with no install and no client object — the SDK
+speaks mem0's REST API directly. Set the key and turn it on:
+
+```bash
+export MEM0_API_KEY=m0-...
+```
+
+```ts
+const ai = new NeoClient({
+  apiKeys: { openai: process.env.OPENAI_API_KEY },
+  memory: true,                    // mem0, configured from MEM0_API_KEY
+});
+
+await ai.generate({
+  model: "openai/gpt-5",
+  messages: [{ role: "user", content: "What was I working on?" }],
+  memory: { userId: "alice" },     // scope it to a user
+});
+```
+
+That's the whole setup. **`mem0ai` is not a dependency** of this package — or
+of your app. Nothing is imported; mem0 is just another HTTP backend.
+
+`memory: true` also works per request, and `memory: false` turns it off for one
+call even when the client has it on.
+
+### Configuring mem0
+
+```ts
+memory: {
+  mem0: {
+    apiKey: "m0-...",                     // defaults to MEM0_API_KEY
+    baseURL: "https://mem0.internal",     // self-hosted
+    orgId: "org_123",
+    projectId: "proj_456",
+    searchPath: "/v2/memories/search/",   // if mem0 moves an endpoint
+  },
+  userId: "alice",
+}
+```
+
+Both the base URL and the paths are overridable, so an API change on mem0's
+side can be worked around without waiting for an SDK release.
+
+### How it works
+
+Recalled memories are injected as a **system message ahead of your
+conversation**; your own messages are never rewritten. After the reply, the
+latest user turn and the assistant's response are sent to mem0, which does its
+own fact extraction and deduplication.
+
+### Options
+
+```ts
+memory: {
+  mem0: true,               // or a config object, or use your own `store`
+  userId, agentId, runId,   // scoping, passed through to the backend
+  limit: 5,                 // how many memories to recall
+  recall: true,             // look up memories before the call
+  persist: true,            // store the exchange after it
+  strict: false,            // see below
+  onError: (err, stage) => log(err, stage),   // "recall" | "persist"
+  query:   (messages) => messages.at(-1)!.content,     // what to search on
+  format:  (memories) => memories.map(m => m.memory).join("\n"),
+  capture: (messages, result) => [...],                // what to store
+}
+```
+
+### Failures are non-fatal by default
+
+If mem0 is unreachable — or `MEM0_API_KEY` is missing — the call still
+completes. Answer quality degrades, but your application stays up, and errors
+surface through `onError`. Set `strict: true` to make memory failures fail the
+request instead.
+
+### Guardrails run around memory
+
+Guardrails bracket memory on both sides:
+
+```
+input guardrails → recall → provider → tool-call guardrails → output guardrails → persist
+```
+
+So `redact()` scrubs text **before** it reaches the store. That ordering matters
+more than usual here: memory is long-lived, and a secret written into it
+persists well beyond the request that leaked it.
+
+### Any backend
+
+`MemoryStore` is two methods, so you can use your own vector store, Redis, or
+Postgres instead. A `store` takes precedence over mem0:
+
+```ts
+import type { MemoryStore } from "neo-ai-sdk";
+
+const store: MemoryStore = {
+  async search(query, scope) {
+    return [{ memory: "…" }];
+  },
+  async add(messages, scope) {
+    /* persist */
+  },
+};
+
+new NeoClient({ apiKeys, memory: { store, userId: "alice" } });
+```
+
+For development and tests, `inMemoryStore()` is a dependency-free store with
+naive keyword matching — enough to exercise the wiring without an API key, but
+not a substitute for a real backend.
+
 ## Multi-agent orchestration
 
 Pass `orchestrate` and the model first decides whether the request is worth
@@ -630,6 +748,9 @@ Everything is a named export from `neo-ai-sdk`.
 | `deny` `modify` | fn | Guardrail decision helpers |
 | `maxInputLength` `blockInputPatterns` `denyTools` `allowTools` `requireApproval` `blockToolArguments` `validateOutput` `redact` | fn | Built-in guardrails |
 | `SENSITIVE_PATTERNS` | const | Default redaction patterns |
+| `mem0Store` `mem0FromEnv` | fn | mem0-backed MemoryStore (also used by `memory: true`) |
+| `inMemoryStore` | fn | Dependency-free store for dev and tests |
+| `MemoryStore` `MemoryOptions` `MemorySpec` `MemoryRecord` `MemoryScope` `Mem0StoreOptions` | type | Memory types |
 | `Guardrail` `GuardrailDecision` `InputContext` `ToolCallContext` `OutputContext` | type | Guardrail types |
 | `APIError` `AuthenticationError` `RateLimitError` `TimeoutError` | class | Error subclasses |
 | `Provider` | type | Interface for custom backends |
