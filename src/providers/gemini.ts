@@ -23,6 +23,7 @@ import type {
   ToolChoice,
 } from "../core/types.js";
 import { splitSystem } from "./shared.js";
+import { describeSchema, parseOutput, resolveOutput } from "../core/output.js";
 
 interface GeminiPart {
   text?: string;
@@ -105,12 +106,21 @@ function buildBody(params: GenerateParams): Record<string, unknown> {
   });
 
   const hasTools = Boolean(params.tools?.length);
+  const output = params.output ? resolveOutput(params.output) : undefined;
+
   return {
     contents,
     ...(system !== undefined ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     generationConfig: {
       ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
       ...(params.maxTokens !== undefined ? { maxOutputTokens: params.maxTokens } : {}),
+      // Gemini constrains structured output via the generation config.
+      ...(output
+        ? {
+            responseMimeType: "application/json",
+            responseSchema: describeSchema(output).schema,
+          }
+        : {}),
     },
     ...(hasTools ? { tools: [{ functionDeclarations: toGeminiTools(params.tools!) }] } : {}),
     ...(hasTools && params.toolChoice !== undefined
@@ -154,10 +164,13 @@ export async function geminiGenerate(
 
   const candidate = res.candidates?.[0];
   const toolCalls = toolCallsOf(candidate);
+  const text = textOf(candidate);
+  const output = params.output ? resolveOutput(params.output) : undefined;
 
   return {
-    text: textOf(candidate),
+    text,
     model,
+    ...(output ? { object: parseOutput(output, text) } : {}),
     usage: {
       inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
       outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,

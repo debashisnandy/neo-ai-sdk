@@ -19,6 +19,13 @@ import type {
   ToolChoice,
 } from "../core/types.js";
 import { DEFAULT_MAX_TOKENS, ToolCallAccumulator, splitSystem } from "./shared.js";
+import {
+  describeSchema,
+  resolveOutput,
+  validateOutput,
+  type OutputSchema,
+} from "../core/output.js";
+import { NeoError } from "../core/errors.js";
 
 interface AnthropicResponse {
   model?: string;
@@ -95,20 +102,47 @@ function toAnthropicToolChoice(choice: ToolChoice): unknown {
   }
 }
 
+/**
+ * Anthropic has no native JSON-schema response mode. Structured output is done
+ * by declaring the schema as a single tool and forcing the model to call it —
+ * the tool's `input` is then the validated object.
+ */
+function outputToolFor(output: OutputSchema): { name: string; tool: unknown; choice: unknown } {
+  const { name, description, schema } = describeSchema(output);
+  return {
+    name,
+    tool: {
+      name,
+      description: description ?? "Return the response in this exact structure.",
+      input_schema: schema,
+    },
+    choice: { type: "tool", name },
+  };
+}
+
 /** Build the shared request body (minus the `stream` flag). */
 function buildBody(model: string, params: GenerateParams): Record<string, unknown> {
   const { system, rest } = splitSystem(params.messages);
   const hasTools = Boolean(params.tools?.length);
+  const output = params.output ? resolveOutput(params.output) : undefined;
+
+  // Structured output takes over the tool slot; unified.ts rejects using both.
+  const outputTool = output ? outputToolFor(output) : undefined;
+
   return {
     model,
     max_tokens: params.maxTokens ?? DEFAULT_MAX_TOKENS,
     messages: toAnthropicMessages(rest),
     ...(system !== undefined ? { system } : {}),
     ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-    ...(hasTools ? { tools: toAnthropicTools(params.tools!) } : {}),
-    ...(hasTools && params.toolChoice !== undefined
-      ? { tool_choice: toAnthropicToolChoice(params.toolChoice) }
-      : {}),
+    ...(outputTool
+      ? { tools: [outputTool.tool], tool_choice: outputTool.choice }
+      : {
+          ...(hasTools ? { tools: toAnthropicTools(params.tools!) } : {}),
+          ...(hasTools && params.toolChoice !== undefined
+            ? { tool_choice: toAnthropicToolChoice(params.toolChoice) }
+            : {}),
+        }),
   };
 }
 
@@ -138,13 +172,36 @@ export async function anthropicGenerate(
       arguments: b.input ?? {},
     }));
 
+  const usage = {
+    inputTokens: res.usage?.input_tokens ?? 0,
+    outputTokens: res.usage?.output_tokens ?? 0,
+  };
+
+  if (params.output) {
+    const output = resolveOutput(params.output);
+    const wanted = describeSchema(output).name;
+    const call = toolCalls.find((c) => c.name === wanted);
+    if (!call) {
+      throw new NeoError(
+        `Model did not return structured output: expected a "${wanted}" tool call.`,
+      );
+    }
+    return {
+      // Present the object as JSON text so `text` means the same thing on
+      // every provider, and hide the synthetic tool from `toolCalls`.
+      text: JSON.stringify(call.arguments),
+      model: res.model ?? model,
+      usage,
+      toolCalls: [],
+      object: validateOutput(output, call.arguments),
+      finishReason: "stop",
+    };
+  }
+
   return {
     text,
     model: res.model ?? model,
-    usage: {
-      inputTokens: res.usage?.input_tokens ?? 0,
-      outputTokens: res.usage?.output_tokens ?? 0,
-    },
+    usage,
     toolCalls,
     finishReason: mapStopReason(res.stop_reason, toolCalls.length > 0),
   };

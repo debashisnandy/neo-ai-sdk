@@ -20,6 +20,7 @@ console.log(result.text);
 - **Typed model ids** — an unknown provider prefix is a compile-time error.
 - **One result shape** — same `text` / `usage` / `finishReason` from every provider.
 - **Tool calling** with one normalized shape across all three wire formats.
+- **Structured output** — pass a Zod (or any Standard Schema) schema, get a typed object.
 - **Streaming** everywhere, via a normalized `StreamChunk`.
 - **Multi-agent orchestration** — let the model split big tasks across sub-agents.
 - **No runtime dependencies.** ESM + CJS, Node >= 20.11.
@@ -33,7 +34,7 @@ npm install neo-ai-sdk
 ## Contents
 
 [Providers](#providers) · [Keys](#keys) · [Typed model ids](#typed-model-ids) ·
-[Streaming](#streaming) · [Tool calling](#tool-calling) ·
+[Streaming](#streaming) · [Tool calling](#tool-calling) · [Structured output](#structured-output) ·
 [Multi-agent orchestration](#multi-agent-orchestration) · [Messages](#messages) ·
 [Configuration](#configuration) · [Errors](#errors) ·
 [Result shape](#result-shape) · [Custom providers](#custom-providers) ·
@@ -186,6 +187,94 @@ Gemini has no tool-call ids — it matches a result to its call by function
 *name*. The SDK synthesizes ids (`call_0`, `call_1`, …) so your code looks the
 same everywhere, and resolves them back to names when sending results. You can
 ignore this unless you persist conversations across providers.
+
+## Structured output
+
+Pass a schema and get a typed, validated object back instead of prose.
+
+```ts
+import { z } from "zod";
+
+const Recipe = z.object({
+  name: z.string(),
+  minutes: z.number(),
+  steps: z.array(z.string()),
+});
+
+const result = await ai.generate({
+  model: "openai/gpt-5",
+  messages: [{ role: "user", content: "Give me a recipe for toast." }],
+  output: Recipe,
+});
+
+result.object.minutes;    // number — fully typed, no cast
+result.object.steps[0];   // string | undefined
+result.text;              // the same data as raw JSON
+```
+
+`result.object` is typed from the schema and guaranteed present when you pass
+`output` — no null check needed.
+
+### Any schema library
+
+The SDK has **no dependency on Zod**. It accepts any
+[Standard Schema](https://standardschema.dev) implementation — Zod 3.24+,
+Valibot, ArkType — and wires validation to whichever you use.
+
+Zod 4 schemas convert themselves to JSON Schema, so they work as shown above.
+For a library that can't, supply the JSON Schema once with `fromSchema`:
+
+```ts
+import { fromSchema } from "neo-ai-sdk";
+
+const output = fromSchema(MySchema, myJsonSchema, { name: "recipe" });
+await ai.generate({ model, messages, output });
+```
+
+Plain JSON Schema works too, with no schema library at all:
+
+```ts
+output: {
+  name: "recipe",
+  jsonSchema: {
+    type: "object",
+    properties: { name: { type: "string" }, minutes: { type: "number" } },
+    required: ["name", "minutes"],
+  },
+}
+```
+
+Without a `parse` function you get the decoded JSON untyped — the provider
+still constrains the shape, but nothing validates it client-side.
+
+### How each provider enforces it
+
+| Provider | Mechanism |
+| --- | --- |
+| OpenAI-compatible | `response_format: { type: "json_schema", strict: true }` |
+| Gemini | `responseMimeType: "application/json"` + `responseSchema` |
+| Anthropic | the schema is declared as a single **forced tool call** |
+
+Anthropic has no JSON mode, so the SDK models the schema as a tool and requires
+the model to call it. That is invisible from the outside: `result.object` is
+populated, `toolCalls` stays empty, and `finishReason` is `"stop"`.
+
+### Errors and limits
+
+Anything that would hand you unusable data throws a `NeoError`:
+
+- the model returns invalid JSON,
+- the JSON violates the schema (the message names the failing path, e.g.
+  `steps.0: expected string`),
+- Anthropic answers with prose instead of calling the tool.
+
+Two limits worth knowing:
+
+- **`output` and `tools` cannot be combined.** Anthropic implements one using
+  the other, so allowing it would work on some providers and not others.
+  Run structured output as a separate call.
+- **Asynchronous schema validation is rejected.** Zod's `.refine(async …)`
+  throws rather than being silently skipped.
 
 ## Multi-agent orchestration
 
@@ -361,6 +450,7 @@ interface GenerateResult {
   model: string;
   usage: { inputTokens: number; outputTokens: number };
   toolCalls: ToolCall[];
+  object?: T;                         // typed + guaranteed when `output` is passed
   finishReason: "stop" | "length" | "content_filter" | "tool_use" | "error";
   orchestration?: OrchestrationTrace; // only when `orchestrate` was set
 }
@@ -416,7 +506,9 @@ Everything is a named export from `neo-ai-sdk`.
 | `APIError` `AuthenticationError` `RateLimitError` `TimeoutError` | class | Error subclasses |
 | `Provider` | type | Interface for custom backends |
 | `WorkerPool` | class | Thread pool behind the "worker" executor, usable directly |
+| `fromSchema` | fn | Adapt a Standard Schema (Zod, Valibot, …) for structured output |
 | `Message` `Role` `Tool` `ToolCall` `ToolChoice` `JSONSchema` | type | Request types |
+| `OutputSchema` `OutputSpec` `InferOutput` `StandardSchemaV1` | type | Structured-output types |
 | `OrchestrateOptions` `OrchestrationTrace` `SubtaskResult` | type | Orchestration types |
 | `GenerateParams` `GenerateResult` `StreamChunk` `Usage` | type | Call and response types |
 | `ProviderModelId` `ParsedModelId` | type | Model-id types |

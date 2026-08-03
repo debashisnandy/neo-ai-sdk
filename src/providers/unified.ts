@@ -54,6 +54,16 @@ export class UnifiedProvider implements Provider {
   constructor(private readonly options: UnifiedProviderOptions) {}
 
   async generate(params: UnifiedGenerateParams): Promise<GenerateResult> {
+    // Anthropic implements structured output by commandeering the tool slot,
+    // so the two cannot coexist. Rejecting everywhere keeps behavior identical
+    // across providers instead of working on some and not others.
+    if (params.output && params.tools?.length) {
+      throw new NeoError(
+        "`output` and `tools` cannot be used together. Run structured output as " +
+          "a separate call, or model the structure as a tool and read toolCalls.",
+      );
+    }
+
     const orchestration = resolveOrchestrate(params.orchestrate);
     if (orchestration) return this.runOrchestrated(params, orchestration);
     return this.generateOnce(params);

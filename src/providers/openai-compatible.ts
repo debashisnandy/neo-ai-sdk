@@ -15,6 +15,12 @@ import type {
   ToolChoice,
 } from "../core/types.js";
 import { ToolCallAccumulator, parseToolArguments } from "./shared.js";
+import {
+  describeSchema,
+  parseOutput,
+  resolveOutput,
+  type OutputSchema,
+} from "../core/output.js";
 
 /** Minimal shape of a /chat/completions response — only what we consume. */
 interface ChatCompletionResponse {
@@ -86,6 +92,8 @@ function toOpenAIToolChoice(choice: ToolChoice): unknown {
 /** Shared request body for both generate() and stream(). */
 function buildBody(model: string, params: GenerateParams): Record<string, unknown> {
   const hasTools = Boolean(params.tools?.length);
+  const output = params.output ? resolveOutput(params.output) : undefined;
+
   return {
     model,
     messages: toOpenAIMessages(params.messages),
@@ -95,6 +103,22 @@ function buildBody(model: string, params: GenerateParams): Record<string, unknow
     ...(hasTools && params.toolChoice !== undefined
       ? { tool_choice: toOpenAIToolChoice(params.toolChoice) }
       : {}),
+    // Native structured output: the provider constrains decoding to the schema.
+    ...(output ? { response_format: toResponseFormat(output) } : {}),
+  };
+}
+
+function toResponseFormat(output: OutputSchema): unknown {
+  const { name, description, schema } = describeSchema(output);
+  return {
+    type: "json_schema",
+    json_schema: {
+      name,
+      ...(description ? { description } : {}),
+      schema,
+      // Ask the provider to guarantee conformance rather than merely suggest it.
+      strict: true,
+    },
   };
 }
 
@@ -125,14 +149,18 @@ export async function openAICompatibleGenerate(
     };
   });
 
+  const text = choice?.message?.content ?? "";
+  const output = params.output ? resolveOutput(params.output) : undefined;
+
   return {
-    text: choice?.message?.content ?? "",
+    text,
     model: res.model ?? model,
     usage: {
       inputTokens: res.usage?.prompt_tokens ?? 0,
       outputTokens: res.usage?.completion_tokens ?? 0,
     },
     toolCalls,
+    ...(output ? { object: parseOutput(output, text) } : {}),
     finishReason: mapFinishReason(choice?.finish_reason, toolCalls.length > 0),
   };
 }
