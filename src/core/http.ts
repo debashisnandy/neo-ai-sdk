@@ -17,12 +17,24 @@ export interface RequestOptions {
   timeoutMs?: number;
 }
 
+/** The subset of fetch the transport relies on, so it can be swapped out. */
+export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
 export interface TransportOptions {
   baseURL: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
   /** Max retry attempts for retryable failures (429 / 5xx / network). */
   maxRetries?: number;
+  /**
+   * Swap the function used to perform requests. Defaults to global fetch.
+   *
+   * This is the seam the orchestrator uses to run requests on worker threads:
+   * because every provider's I/O funnels through here, offloading needs no
+   * provider-specific code. Streaming always uses global fetch — a worker
+   * cannot post a live ReadableStream back to the parent.
+   */
+  fetchImpl?: FetchLike;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -42,9 +54,11 @@ export class Transport {
     const method = options.method ?? "GET";
     const body = options.body === undefined ? undefined : JSON.stringify(options.body);
 
+    const doFetch = this.opts.fetchImpl ?? fetch;
+
     for (let attempt = 0; ; attempt++) {
       try {
-        const res = await fetch(url, {
+        const res = await doFetch(url, {
           method,
           headers,
           body,

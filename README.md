@@ -21,6 +21,7 @@ console.log(result.text);
 - **One result shape** — same `text` / `usage` / `finishReason` from every provider.
 - **Tool calling** with one normalized shape across all three wire formats.
 - **Streaming** everywhere, via a normalized `StreamChunk`.
+- **Multi-agent orchestration** — let the model split big tasks across sub-agents.
 - **No runtime dependencies.** ESM + CJS, Node >= 20.11.
 
 ## Install
@@ -32,7 +33,8 @@ npm install neo-ai-sdk
 ## Contents
 
 [Providers](#providers) · [Keys](#keys) · [Typed model ids](#typed-model-ids) ·
-[Streaming](#streaming) · [Tool calling](#tool-calling) · [Messages](#messages) ·
+[Streaming](#streaming) · [Tool calling](#tool-calling) ·
+[Multi-agent orchestration](#multi-agent-orchestration) · [Messages](#messages) ·
 [Configuration](#configuration) · [Errors](#errors) ·
 [Result shape](#result-shape) · [Custom providers](#custom-providers) ·
 [Exports](#exports)
@@ -185,6 +187,92 @@ Gemini has no tool-call ids — it matches a result to its call by function
 same everywhere, and resolves them back to names when sending results. You can
 ignore this unless you persist conversations across providers.
 
+## Multi-agent orchestration
+
+Pass `orchestrate` and the model first decides whether the request is worth
+splitting. If it is, independent subtasks run as parallel sub-agents and their
+answers are synthesized into one response.
+
+```ts
+const result = await ai.generate({
+  model: "openai/gpt-5",
+  messages: [{ role: "user", content: "Compare Postgres, MySQL and SQLite for our workload." }],
+  orchestrate: true,
+});
+
+console.log(result.text);              // the synthesized answer
+console.log(result.orchestration);     // what actually happened
+```
+
+`result.orchestration` reports the decision:
+
+```ts
+{
+  delegated: true,
+  reasoning: "three independent databases to research",
+  executor: "inline",
+  subtasks: [
+    { id: "postgres", prompt: "Describe Postgres…", text: "…", usage: {…} },
+    { id: "mysql",    prompt: "Describe MySQL…",    text: "…", usage: {…} },
+    { id: "sqlite",   prompt: "Describe SQLite…",   text: "…", usage: {…} },
+  ],
+}
+```
+
+When the planner judges the task simple, `delegated` is `false`, `subtasks` is
+empty, and you get a normal single-call answer. `result.usage` is always the
+**total** across planning, every sub-agent, and synthesis.
+
+### Options
+
+```ts
+orchestrate: {
+  executor: "inline",         // or "worker" — see below
+  maxConcurrency: 4,          // sub-agents running at once
+  maxSubtasks: 5,             // cap on what the planner may propose
+  workers: 4,                 // threads when executor is "worker"
+  plannerModel: "anthropic/claude-opus-5",  // planning + synthesis
+  agentModel: "openai/gpt-5-mini",          // sub-agents
+}
+```
+
+Splitting the models is often the point: plan with a strong model, fan out to a
+cheaper one.
+
+### Choosing an executor
+
+`"inline"` (default) runs sub-agents as concurrent promises. `"worker"` runs
+their HTTP requests on `node:worker_threads`.
+
+**Inline is usually right.** Sub-agent time is almost entirely spent waiting on
+HTTP, which promises already parallelize; threads add startup and serialization
+cost without adding throughput. Measured on a 600 KB response with 4 sub-agents:
+
+| Executor | Wall clock | Worst event-loop stall |
+| --- | --- | --- |
+| `inline` | 31 ms | 8 ms |
+| `worker` | 70 ms | 4 ms |
+
+Workers roughly halve main-thread stalls but roughly double wall-clock. That
+trade only pays off in a server handling other concurrent traffic, where a long
+`JSON.parse` on the main thread hurts everyone else's tail latency. If you are
+running a script or a single request, use `inline`.
+
+Streaming always uses the main thread — a worker cannot pass a live
+`ReadableStream` back to its parent.
+
+### Caveats
+
+- Sub-agents are **independent**: each sees only its own prompt, never the
+  others' output or the original conversation. Tasks needing shared context
+  won't decompose well.
+- Orchestration costs **at least two extra model calls** (planning and
+  synthesis) on top of the sub-agents.
+- A sub-agent that fails is recorded in `subtasks[].error` and the run
+  continues; synthesis is told which parts are missing.
+- The planner is a model, so its judgement varies. Use `maxSubtasks` as a hard
+  ceiling on fan-out and cost.
+
 ## Messages
 
 ```ts
@@ -274,6 +362,7 @@ interface GenerateResult {
   usage: { inputTokens: number; outputTokens: number };
   toolCalls: ToolCall[];
   finishReason: "stop" | "length" | "content_filter" | "tool_use" | "error";
+  orchestration?: OrchestrationTrace; // only when `orchestrate` was set
 }
 ```
 
@@ -326,7 +415,9 @@ Everything is a named export from `neo-ai-sdk`.
 | `NeoError` | class | Base class for every error the SDK throws |
 | `APIError` `AuthenticationError` `RateLimitError` `TimeoutError` | class | Error subclasses |
 | `Provider` | type | Interface for custom backends |
+| `WorkerPool` | class | Thread pool behind the "worker" executor, usable directly |
 | `Message` `Role` `Tool` `ToolCall` `ToolChoice` `JSONSchema` | type | Request types |
+| `OrchestrateOptions` `OrchestrationTrace` `SubtaskResult` | type | Orchestration types |
 | `GenerateParams` `GenerateResult` `StreamChunk` `Usage` | type | Call and response types |
 | `ProviderModelId` `ParsedModelId` | type | Model-id types |
 | `NeoClientOptions` `UnifiedProviderOptions` `UnifiedGenerateParams` | type | Options types |

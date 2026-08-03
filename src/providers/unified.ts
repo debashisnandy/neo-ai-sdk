@@ -9,8 +9,10 @@
 
 import type { Provider } from "./provider.js";
 import type { GenerateParams, GenerateResult, StreamChunk } from "../core/types.js";
-import { Transport } from "../core/http.js";
+import { Transport, type FetchLike } from "../core/http.js";
 import { NeoError } from "../core/errors.js";
+import { WorkerPool } from "../orchestrator/worker-pool.js";
+import { orchestrate, type ResolvedOrchestrateOptions } from "../orchestrator/orchestrator.js";
 import {
   ProviderName,
   PROVIDER_BASE_URLS,
@@ -33,6 +35,11 @@ export interface UnifiedProviderOptions {
   baseURLs?: Partial<Record<ProviderName, string>>;
   timeoutMs?: number;
   maxRetries?: number;
+  /**
+   * Override the function used for requests. Used internally to route
+   * sub-agent traffic through worker threads; see WorkerPool.
+   */
+  fetchImpl?: FetchLike;
 }
 
 /** GenerateParams pinned to the strict "<company>/<model>" id type. */
@@ -47,6 +54,38 @@ export class UnifiedProvider implements Provider {
   constructor(private readonly options: UnifiedProviderOptions) {}
 
   async generate(params: UnifiedGenerateParams): Promise<GenerateResult> {
+    const orchestration = resolveOrchestrate(params.orchestrate);
+    if (orchestration) return this.runOrchestrated(params, orchestration);
+    return this.generateOnce(params);
+  }
+
+  /** Plan → delegate → synthesize, optionally with sub-agents on worker threads. */
+  private async runOrchestrated(
+    params: UnifiedGenerateParams,
+    options: ResolvedOrchestrateOptions,
+  ): Promise<GenerateResult> {
+    const run = (p: GenerateParams) => this.generateOnce(p as UnifiedGenerateParams);
+
+    if (options.executor !== "worker") {
+      return orchestrate(params, options, run);
+    }
+
+    // Sub-agents get their own provider whose transport posts requests to the
+    // pool. The pool is torn down even if orchestration throws, so a failed
+    // request can never leak threads.
+    const pool = new WorkerPool({ size: options.workers ?? options.maxConcurrency });
+    const workerProvider = new UnifiedProvider({ ...this.options, fetchImpl: pool.fetch });
+    try {
+      return await orchestrate(params, options, run, (p) =>
+        workerProvider.generateOnce(p as UnifiedGenerateParams),
+      );
+    } finally {
+      await pool.close();
+    }
+  }
+
+  /** A single, non-orchestrated generate call. */
+  private async generateOnce(params: UnifiedGenerateParams): Promise<GenerateResult> {
     const { provider, model, transport } = this.route(params.model);
 
     if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
@@ -112,9 +151,29 @@ export class UnifiedProvider implements Provider {
       headers: authHeaders(provider, apiKey),
       timeoutMs: this.options.timeoutMs,
       maxRetries: this.options.maxRetries,
+      fetchImpl: this.options.fetchImpl,
     });
 
     this.transports.set(provider, transport);
     return transport;
   }
+}
+
+/** Normalize the `orchestrate` param into full options, or undefined if off. */
+function resolveOrchestrate(
+  value: UnifiedGenerateParams["orchestrate"],
+): ResolvedOrchestrateOptions | undefined {
+  if (!value) return undefined;
+  const opts = value === true ? {} : value;
+  if (opts.enabled === false) return undefined;
+
+  const maxConcurrency = Math.max(1, opts.maxConcurrency ?? 4);
+  return {
+    executor: opts.executor ?? "inline",
+    maxConcurrency,
+    maxSubtasks: Math.max(1, opts.maxSubtasks ?? 5),
+    workers: opts.workers ?? maxConcurrency,
+    plannerModel: opts.plannerModel,
+    agentModel: opts.agentModel,
+  };
 }

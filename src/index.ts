@@ -25,7 +25,14 @@ export type {
   ToolCall,
   ToolChoice,
   JSONSchema,
+  OrchestrateOptions,
+  OrchestrationTrace,
+  SubtaskResult,
 } from "./core/types.js";
+
+// --- Orchestration (advanced) --------------------------------------------
+export { WorkerPool } from "./orchestrator/worker-pool.js";
+export type { WorkerPoolOptions } from "./orchestrator/worker-pool.js";
 
 // --- Errors ---------------------------------------------------------------
 export {

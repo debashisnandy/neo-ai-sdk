@@ -55,6 +55,58 @@ export interface Message {
   toolCallId?: string;
 }
 
+/**
+ * Multi-agent orchestration settings.
+ *
+ * When enabled, the model first plans: it decides whether the request is big
+ * enough to split, and if so proposes independent subtasks. Those run as
+ * sub-agents, and their results are synthesized into one answer.
+ */
+export interface OrchestrateOptions<TModel extends string = string> {
+  /** Defaults to true when an options object is supplied. */
+  enabled?: boolean;
+  /**
+   * Where sub-agents run.
+   *   "inline" — concurrent promises on the main thread (default)
+   *   "worker" — node:worker_threads
+   *
+   * Sub-agent work is dominated by waiting on HTTP, which "inline" already
+   * parallelizes. Choose "worker" when responses are large enough that
+   * JSON parsing blocks the event loop, or when you want thread isolation.
+   */
+  executor?: "inline" | "worker";
+  /** Max sub-agents running at once. Default 4. */
+  maxConcurrency?: number;
+  /** Cap on subtasks the planner may propose. Default 5. */
+  maxSubtasks?: number;
+  /** Thread count when executor is "worker". Defaults to maxConcurrency. */
+  workers?: number;
+  /** Model used for planning and synthesis. Defaults to the request's model. */
+  plannerModel?: TModel;
+  /** Model used by sub-agents. Defaults to the request's model. */
+  agentModel?: TModel;
+}
+
+/** What one sub-agent produced. */
+export interface SubtaskResult {
+  id: string;
+  prompt: string;
+  text: string;
+  usage: Usage;
+  /** Set when the sub-agent failed; its text will be empty. */
+  error?: string;
+}
+
+/** A record of what orchestration actually did, for logging and debugging. */
+export interface OrchestrationTrace {
+  /** False when the planner judged the task small enough to answer directly. */
+  delegated: boolean;
+  /** The planner's stated reason for its decision. */
+  reasoning?: string;
+  executor: "inline" | "worker";
+  subtasks: SubtaskResult[];
+}
+
 export interface GenerateParams<TModel extends string = string> {
   /**
    * Model identifier. Defaults to a plain string, but callers (and the
@@ -70,6 +122,11 @@ export interface GenerateParams<TModel extends string = string> {
   tools?: Tool[];
   /** Constrains tool selection. Ignored when `tools` is empty. */
   toolChoice?: ToolChoice;
+  /**
+   * Let the model decide whether to split this request across sub-agents.
+   * `true` uses defaults; pass an object to configure. See OrchestrateOptions.
+   */
+  orchestrate?: boolean | OrchestrateOptions<TModel>;
   /** Abort in-flight requests. Wired through to the transport's fetch call. */
   signal?: AbortSignal;
 }
@@ -87,6 +144,8 @@ export interface GenerateResult {
   toolCalls: ToolCall[];
   /** Why generation stopped, normalized across providers. */
   finishReason: "stop" | "length" | "content_filter" | "tool_use" | "error";
+  /** Present only when `orchestrate` was enabled. Usage above is the total. */
+  orchestration?: OrchestrationTrace;
 }
 
 /** One incremental piece of a streamed response. */
