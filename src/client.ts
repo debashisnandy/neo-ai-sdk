@@ -16,6 +16,7 @@ import {
 } from "./providers/unified.js";
 import type { Provider } from "./providers/provider.js";
 import type { GenerateResult, StreamChunk } from "./core/types.js";
+import type { InferOutput, OutputSpec } from "./core/output.js";
 
 export interface NeoClientOptions extends Partial<UnifiedProviderOptions> {
   /** Override the default UnifiedProvider, e.g. to plug in a custom Provider. */
@@ -36,7 +37,16 @@ export class NeoClient {
     this.provider = new UnifiedProvider({ ...options, apiKeys });
   }
 
-  /** One-shot text generation. Model is "<company>/<model>". */
+  /**
+   * One-shot text generation. Model is "<company>/<model>".
+   *
+   * Passing `output` narrows the return type so `result.object` is the schema's
+   * type and is guaranteed present.
+   */
+  generate<S extends OutputSpec>(
+    params: UnifiedGenerateParams & { output: S },
+  ): Promise<GenerateResult<InferOutput<S>> & { object: InferOutput<S> }>;
+  generate(params: UnifiedGenerateParams): Promise<GenerateResult>;
   generate(params: UnifiedGenerateParams): Promise<GenerateResult> {
     return this.provider.generate(params);
   }

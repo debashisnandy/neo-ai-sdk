@@ -6,6 +6,8 @@
  * should be mapped to/from these types at the provider boundary.
  */
 
+import type { OutputSpec } from "./output.js";
+
 export type Role = "system" | "user" | "assistant" | "tool";
 
 /** A JSON Schema object describing a tool's arguments. Deliberately permissive. */
@@ -127,6 +129,14 @@ export interface GenerateParams<TModel extends string = string> {
    * `true` uses defaults; pass an object to configure. See OrchestrateOptions.
    */
   orchestrate?: boolean | OrchestrateOptions<TModel>;
+  /**
+   * Constrain the response to a schema. The decoded, validated object is
+   * returned as `result.object`. Accepts a Standard Schema (Zod, Valibot,
+   * ArkType) via `fromSchema`, or a plain JSON Schema.
+   *
+   * Cannot be combined with `tools` — see the note in the README.
+   */
+  output?: OutputSpec;
   /** Abort in-flight requests. Wired through to the transport's fetch call. */
   signal?: AbortSignal;
 }
@@ -136,10 +146,15 @@ export interface Usage {
   outputTokens: number;
 }
 
-export interface GenerateResult {
+export interface GenerateResult<TObject = unknown> {
   text: string;
   model: string;
   usage: Usage;
+  /**
+   * The validated object, present only when `output` was supplied.
+   * Typed as the schema's output when you pass `output` to generate().
+   */
+  object?: TObject;
   /** Tools the model asked to call. Empty when it produced only text. */
   toolCalls: ToolCall[];
   /** Why generation stopped, normalized across providers. */

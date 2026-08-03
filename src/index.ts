@@ -51,3 +51,12 @@ export { UnifiedProvider } from "./providers/unified.js";
 export type { UnifiedProviderOptions, UnifiedGenerateParams } from "./providers/unified.js";
 export { ProviderName, PROVIDER_BASE_URLS, parseModelId } from "./providers/registry.js";
 export type { ProviderModelId, ParsedModelId } from "./providers/registry.js";
+
+// --- Structured output ----------------------------------------------------
+export { fromSchema } from "./core/output.js";
+export type {
+  OutputSchema,
+  OutputSpec,
+  InferOutput,
+  StandardSchemaV1,
+} from "./core/output.js";
