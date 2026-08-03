@@ -6,13 +6,16 @@ on:
   pull_request:
 
 jobs:
+  # Dev tooling (vitest -> rolldown) needs util.styleText, added in Node 20.12,
+  # so the toolchain cannot run on the 20.11 floor declared in engines. The
+  # published package itself has no such requirement — the `package` job below
+  # verifies it on 20.11 directly.
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Lowest supported version (see engines) and current LTS.
-        node: ["20.11", "22"]
+        node: ["20", "22"]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,22 +31,72 @@ jobs:
       - run: npm test
       - run: npm run build
 
-      # Catches packaging regressions (exports map, files, declarations) that
-      # only appear once the package is installed rather than imported from src.
-      - name: Verify the packed tarball resolves
+  # Builds on a current Node, then runs the packed tarball on the oldest
+  # supported runtime. Catches packaging regressions (exports map, files,
+  # declarations) and proves the engines floor is real rather than aspirational.
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack --pack-destination /tmp
+
+      # Switch the runtime to the engines floor for the checks below.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.11"
+
+      - name: Install the tarball into a clean project
         run: |
-          npm pack --pack-destination /tmp
           mkdir -p /tmp/consumer && cd /tmp/consumer
           npm init -y >/dev/null
           npm install /tmp/neo-ai-sdk-*.tgz
-          node --input-type=module -e "
-            import { NeoClient, parseModelId } from 'neo-ai-sdk';
-            if (typeof NeoClient !== 'function') throw new Error('ESM export missing');
-            if (parseModelId('openai/gpt-5').provider !== 'openai') throw new Error('ESM behavior wrong');
-            console.log('ESM ok');
-          "
+
+      - name: Import and exercise it on the oldest supported Node
+        working-directory: /tmp/consumer
+        run: |
           node --input-type=commonjs -e "
             const { NeoClient } = require('neo-ai-sdk');
             if (typeof NeoClient !== 'function') throw new Error('CJS export missing');
-            console.log('CJS ok');
+            console.log('CJS import ok');
+          "
+          node --input-type=module -e "
+            import http from 'node:http';
+            import { NeoClient, ProviderName, parseModelId } from 'neo-ai-sdk';
+
+            if (parseModelId('openai/gpt-5').provider !== 'openai') throw new Error('parseModelId wrong');
+
+            // A real request against a local server: exercises fetch,
+            // AbortSignal.any and AbortSignal.timeout on this Node version.
+            const server = http.createServer((req, res) => {
+              res.setHeader('content-type', 'application/json');
+              res.end(JSON.stringify({
+                choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 1, completion_tokens: 1 },
+              }));
+            });
+            await new Promise((r) => server.listen(0, r));
+
+            const ai = new NeoClient({
+              apiKeys: { openai: 'test' },
+              baseURLs: { [ProviderName.OpenAI]: \`http://127.0.0.1:\${server.address().port}/v1\` },
+              timeoutMs: 5000,
+            });
+
+            const result = await ai.generate({
+              model: 'openai/gpt-5',
+              messages: [{ role: 'user', content: 'hi' }],
+            });
+            if (result.text !== 'ok') throw new Error('unexpected result: ' + JSON.stringify(result));
+
+            server.close();
+            console.log('ESM import + live request ok on', process.version);
           "
