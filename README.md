@@ -120,7 +120,7 @@ Declare tools once; the SDK translates them to each provider's format and
 normalizes the calls that come back.
 
 ```ts
-import { NeoClient, type Tool } from "neo-ai-sdk";
+import { NeoClient, type Message, type Tool } from "neo-ai-sdk";
 
 const getWeather: Tool = {
   name: "get_weather",
@@ -132,7 +132,9 @@ const getWeather: Tool = {
   },
 };
 
-const messages = [{ role: "user", content: "What's the weather in Oslo?" }];
+// Annotate the array as Message[]. Without it TypeScript infers
+// `{ role: string; content: string }[]` and the pushes below won't compile.
+const messages: Message[] = [{ role: "user", content: "What's the weather in Oslo?" }];
 
 const result = await ai.generate({
   model: "anthropic/claude-opus-5",
@@ -158,7 +160,9 @@ if (result.finishReason === "tool_use") {
 ```
 
 That loop is identical for every provider — swap the model id and nothing else
-changes.
+changes. The `if` above handles a single round; a model may ask for more tools
+after seeing the results, so use `while (result.finishReason === "tool_use")`
+and reassign `result` each pass if you want to run to completion.
 
 `call.arguments` is already a parsed object. If a model emits malformed JSON the
 SDK throws a `NeoError` naming the tool rather than handing you `{}`, so a tool
@@ -615,7 +619,7 @@ interface Message {
 ```
 
 ```ts
-const messages = [
+const messages: Message[] = [
   { role: "system", content: "Answer in one sentence." },
   { role: "user", content: "What is SSE?" },
   { role: "assistant", content: "Server-Sent Events." },
